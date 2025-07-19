@@ -1,5 +1,3 @@
-
-
 query 1 untuk melihat semua pesanan dengan nama user tertentu
 
 queri asli:
@@ -206,11 +204,11 @@ Execution Time: 118.783 ms
 
 analisis EXPLAIN analyze query asli :
 Melakukan sequential scan pada tabel order_items.
-Waktu eksekusi aktual: 118.783 mss.
+Waktu eksekusi : 118.783 ms.
 
 query optimal :
 CREATE INDEX idx_order_items_product_id ON order_items (product_id);
-EXPLAIN analyze SELECT
+SELECT
     p.name,
     SUM(oi.quantity) AS total_sold
 FROM order_items oi
@@ -250,3 +248,112 @@ Execution Time: 98.210 ms
 
 analisis EXPLAIN analyze query optimal :
 Eksekusi jadi lebih cepat dengan waktu eksekusi : 98.210 ms.
+
+query 4 untuk mencari user yang belum pernah order
+
+queri asli:
+SELECT u.id, u.name, u.email
+FROM users u
+WHERE u.id NOT IN (SELECT DISTINCT user_id FROM orders);
+
+output dari EXPLAIN analyze query asli :
+Seq Scan on users u  (cost=2466.50..2499.00 rows=500 width=47) (actual time=30.055..30.058 rows=0 loops=1)
+  Filter: (NOT (ANY (id = (hashed SubPlan 1).col1)))
+  Rows Removed by Filter: 1000
+  SubPlan 1
+    ->  HashAggregate  (cost=2454.00..2464.00 rows=1000 width=8) (actual time=29.528..29.637 rows=1000 loops=1)
+          Group Key: orders.user_id
+          Batches: 1  Memory Usage: 129kB
+          ->  Seq Scan on orders  (cost=0.00..2204.00 rows=100000 width=8) (actual time=0.004..10.062 rows=100000 loops=1)
+Planning Time: 0.094 ms
+Execution Time: 30.118 ms
+
+analisis EXPLAIN analyze query asli :
+Melakukan sequential scan pada users.
+Waktu eksekusi : 30.118 ms.
+
+query optimal :
+CREATE INDEX idx_orders_user_id ON orders (user_id);
+SELECT u.id, u.name, u.email
+FROM users u
+WHERE u.id NOT IN (SELECT DISTINCT user_id FROM orders);
+
+output dari EXPLAIN analyze query optimal :
+Seq Scan on users u  (cost=2466.50..2499.00 rows=500 width=47) (actual time=17.322..17.323 rows=0 loops=1)
+  Filter: (NOT (ANY (id = (hashed SubPlan 1).col1)))
+  Rows Removed by Filter: 1000
+  SubPlan 1
+    ->  HashAggregate  (cost=2454.00..2464.00 rows=1000 width=8) (actual time=16.851..16.941 rows=1000 loops=1)
+          Group Key: orders.user_id
+          Batches: 1  Memory Usage: 129kB
+          ->  Seq Scan on orders  (cost=0.00..2204.00 rows=100000 width=8) (actual time=0.011..5.914 rows=100000 loops=1)
+Planning Time: 2.693 ms
+Execution Time: 17.366 ms
+
+analisis EXPLAIN analyze query optimal :
+Eksekusi jadi lebih cepat dengan waktu eksekusi : 17.366 ms.
+
+query 5 untuk menghitung jumlah Pesanan dan total pendapatan per bulan untuk setiap user
+
+queri asli:
+SELECT
+    u.name AS user_name,
+    TO_CHAR(o.order_date, 'YYYY-MM') AS order_month,
+    COUNT(o.id) AS total_orders_in_month,
+    SUM(o.total_amount) AS total_spent_in_month
+FROM users u
+JOIN orders o ON u.id = o.user_id
+GROUP BY u.name, order_month
+ORDER BY u.name, order_month;
+
+output dari EXPLAIN analyze query asli :
+GroupAggregate  (cost=14827.43..17577.43 rows=100000 width=88) (actual time=284.274..334.727 rows=24379 loops=1)
+  Group Key: u.name, (to_char(o.order_date, 'YYYY-MM'::text))
+  ->  Sort  (cost=14827.43..15077.43 rows=100000 width=64) (actual time=283.068..307.536 rows=100000 loops=1)
+        Sort Key: u.name, (to_char(o.order_date, 'YYYY-MM'::text))
+        Sort Method: external merge  Disk: 5400kB
+        ->  Hash Join  (cost=42.50..2760.11 rows=100000 width=64) (actual time=13.164..55.275 rows=100000 loops=1)
+              Hash Cond: (o.user_id = u.id)
+              ->  Seq Scan on orders o  (cost=0.00..2204.00 rows=100000 width=32) (actual time=0.014..7.966 rows=100000 loops=1)
+              ->  Hash  (cost=30.00..30.00 rows=1000 width=24) (actual time=0.289..0.290 rows=1000 loops=1)
+                    Buckets: 1024  Batches: 1  Memory Usage: 67kB
+                    ->  Seq Scan on users u  (cost=0.00..30.00 rows=1000 width=24) (actual time=0.007..0.160 rows=1000 loops=1)
+Planning Time: 4.691 ms
+Execution Time: 336.442 ms
+
+analisis EXPLAIN analyze query asli :
+Melakukan sequential scan pada orders.
+Waktu eksekusi : 336.442 ms.
+
+query optimal :
+CREATE INDEX idx_orders_user_month_truncated ON orders (user_id, DATE_TRUNC('month', order_date));
+SELECT
+    u.name AS user_name,
+    DATE_TRUNC('month', o.order_date) AS order_month,
+    COUNT(o.id) AS total_orders_in_month,
+    SUM(o.total_amount) AS total_spent_in_month
+FROM users u
+JOIN orders o ON u.id = o.user_id
+GROUP BY u.id, u.name, order_month
+ORDER BY u.name, order_month;
+
+output dari EXPLAIN analyze query optimal :
+Sort  (cost=23527.89..23777.89 rows=100000 width=72) (actual time=117.429..118.355 rows=24379 loops=1)
+  Sort Key: u.name, (date_trunc('month'::text, o.order_date))
+  Sort Method: quicksort  Memory: 2579kB
+  ->  GroupAggregate  (cost=0.57..11121.07 rows=100000 width=72) (actual time=0.117..100.383 rows=24379 loops=1)
+        Group Key: u.id, date_trunc('month'::text, o.order_date)
+        ->  Merge Join  (cost=0.57..8621.07 rows=100000 width=48) (actual time=0.023..74.349 rows=100000 loops=1)
+              Merge Cond: (o.user_id = u.id)
+              ->  Index Scan using idx_orders_user_month_truncated on orders o  (cost=0.29..7060.29 rows=100000 width=32) (actual time=0.009..53.199 rows=100000 loops=1)
+              ->  Index Scan using users_pkey on users u  (cost=0.28..58.27 rows=1000 width=24) (actual time=0.007..0.725 rows=1000 loops=1)
+Planning Time: 3.456 ms
+Execution Time: 121.170 ms
+
+analisis EXPLAIN analyze query optimal :
+Eksekusi jadi lebih cepat dengan waktu eksekusi : 121.170 ms.
+
+
+
+
+

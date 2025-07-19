@@ -1,0 +1,252 @@
+
+
+query 1 untuk melihat semua pesanan dengan nama user tertentu
+
+queri asli:
+SELECT
+    u.name AS user_name,
+    o.order_date,
+    o.total_amount,
+    p.name AS product_name,
+    oi.quantity,
+    oi.price_at_order
+FROM users u
+JOIN orders o ON u.id = o.user_id
+JOIN order_items oi ON o.id = oi.order_id
+JOIN products p ON oi.product_id = p.id
+WHERE u.name LIKE 'Rowland Walter%';
+
+output dari EXPLAIN analyze query asli :
+Nested Loop  (cost=2980.83..11197.88 rows=500 width=59) (actual time=21.282..60.001 rows=501 loops=1)
+  ->  Gather  (cost=2980.55..11051.49 rows=500 width=52) (actual time=21.261..58.680 rows=501 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        ->  Parallel Hash Join  (cost=1980.55..10001.49 rows=208 width=52) (actual time=9.643..44.574 rows=167 loops=3)
+              Hash Cond: (oi.order_id = o.id)
+              ->  Parallel Seq Scan on order_items oi  (cost=0.00..7238.42 rows=208342 width=28) (actual time=0.012..15.982 rows=166667 loops=3)
+              ->  Parallel Hash  (cost=1979.82..1979.82 rows=59 width=40) (actual time=9.080..9.082 rows=31 loops=3)
+                    Buckets: 1024  Batches: 1  Memory Usage: 104kB
+                    ->  Hash Join  (cost=32.51..1979.82 rows=59 width=40) (actual time=0.575..8.812 rows=31 loops=3)
+                          Hash Cond: (o.user_id = u.id)
+                          ->  Parallel Seq Scan on orders o  (cost=0.00..1792.24 rows=58824 width=32) (actual time=0.015..4.482 rows=33333 loops=3)
+                          ->  Hash  (cost=32.50..32.50 rows=1 width=24) (actual time=0.245..0.246 rows=1 loops=3)
+                                Buckets: 1024  Batches: 1  Memory Usage: 9kB
+                                ->  Seq Scan on users u  (cost=0.00..32.50 rows=1 width=24) (actual time=0.027..0.239 rows=1 loops=3)
+                                      Filter: ((name)::text ~~ 'Rowland Walter%'::text)
+                                      Rows Removed by Filter: 999
+  ->  Index Scan using products_pkey on products p  (cost=0.28..0.29 rows=1 width=23) (actual time=0.002..0.002 rows=1 loops=501)
+        Index Cond: (id = oi.product_id)
+Planning Time: 0.602 ms
+Execution Time: 60.077 ms
+
+analisis EXPLAIN analyze query asli :
+Melakukan sequential scan pada tabel orders dan users.
+Waktu eksekusi : 60.077 ms.
+
+query optimal :
+CREATE INDEX idx_orders_user_id ON orders (user_id);
+SELECT
+    u.name AS user_name,
+    o.order_date,
+    o.total_amount,
+    p.name AS product_name,
+    oi.quantity,
+    oi.price_at_order
+FROM users u
+JOIN orders o ON u.id = o.user_id
+JOIN order_items oi ON o.id = oi.order_id
+JOIN products p ON oi.product_id = p.id
+WHERE u.name LIKE 'Rowland Walter%';
+
+output dari EXPLAIN analyze query optimal :
+Nested Loop  (cost=1346.75..9564.65 rows=500 width=59) (actual time=3.372..47.684 rows=501 loops=1)
+  ->  Gather  (cost=1346.47..9418.25 rows=500 width=52) (actual time=3.352..46.101 rows=501 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        ->  Hash Join  (cost=346.47..8368.25 rows=208 width=52) (actual time=1.992..37.666 rows=167 loops=3)
+              Hash Cond: (oi.order_id = o.id)
+              ->  Parallel Seq Scan on order_items oi  (cost=0.00..7238.42 rows=208342 width=28) (actual time=0.059..17.127 rows=166667 loops=3)
+              ->  Hash  (cost=345.22..345.22 rows=100 width=40) (actual time=1.359..1.361 rows=94 loops=3)
+                    Buckets: 1024  Batches: 1  Memory Usage: 16kB
+                    ->  Nested Loop  (cost=5.07..345.22 rows=100 width=40) (actual time=0.260..1.307 rows=94 loops=3)
+                          ->  Seq Scan on users u  (cost=0.00..32.50 rows=1 width=24) (actual time=0.051..0.537 rows=1 loops=3)
+                                Filter: ((name)::text ~~ 'Rowland Walter%'::text)
+                                Rows Removed by Filter: 999
+                          ->  Bitmap Heap Scan on orders o  (cost=5.07..311.72 rows=100 width=32) (actual time=0.205..0.735 rows=94 loops=3)
+                                Recheck Cond: (u.id = user_id)
+                                Heap Blocks: exact=89
+                                ->  Bitmap Index Scan on idx_orders_user_id  (cost=0.00..5.04 rows=100 width=0) (actual time=0.173..0.173 rows=94 loops=3)
+                                      Index Cond: (user_id = u.id)
+  ->  Index Scan using products_pkey on products p  (cost=0.28..0.29 rows=1 width=23) (actual time=0.002..0.002 rows=1 loops=501)
+        Index Cond: (id = oi.product_id)
+Planning Time: 1.764 ms
+Execution Time: 48.341 ms
+
+analisis EXPLAIN analyze query optimal :
+Eksekusi jadi lebih cepat dengan waktu eksekusi : 48.341 ms.
+
+query 2 untuk melihat semua total pendapatan dari produk dengan deskripsi tertentu dan rentang waktu
+
+queri asli:
+SELECT
+    SUM(oi.quantity * oi.price_at_order) AS total_revenue
+FROM order_items oi
+JOIN products p ON oi.product_id = p.id
+JOIN orders o ON oi.order_id = o.id
+WHERE p.description LIKE '%Sed%'
+AND o.order_date BETWEEN '2025-01-01' AND '2025-03-31';
+
+output dari EXPLAIN analyze query asli :
+Finalize Aggregate  (cost=11035.69..11035.70 rows=1 width=32) (actual time=82.683..85.465 rows=1 loops=1)
+  ->  Gather  (cost=11035.47..11035.68 rows=2 width=32) (actual time=82.498..85.456 rows=3 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        ->  Partial Aggregate  (cost=10035.47..10035.48 rows=1 width=32) (actual time=74.806..74.809 rows=1 loops=3)
+              ->  Parallel Hash Join  (cost=2218.47..10027.97 rows=999 width=12) (actual time=21.016..73.964 rows=960 loops=3)
+                    Hash Cond: (oi.order_id = o.id)
+                    ->  Hash Join  (cost=44.00..7831.63 rows=8334 width=20) (actual time=0.869..52.094 rows=7804 loops=3)
+                          Hash Cond: (oi.product_id = p.id)
+                          ->  Parallel Seq Scan on order_items oi  (cost=0.00..7238.42 rows=208342 width=28) (actual time=0.018..25.749 rows=166667 loops=3)
+                          ->  Hash  (cost=43.50..43.50 rows=40 width=8) (actual time=0.804..0.804 rows=46 loops=3)
+                                Buckets: 1024  Batches: 1  Memory Usage: 10kB
+                                ->  Seq Scan on products p  (cost=0.00..43.50 rows=40 width=8) (actual time=0.031..0.784 rows=46 loops=3)
+                                      Filter: (description ~~ '%Sed%'::text)
+                                      Rows Removed by Filter: 954
+                    ->  Parallel Hash  (cost=2086.35..2086.35 rows=7049 width=8) (actual time=19.227..19.228 rows=4037 loops=3)
+                          Buckets: 16384  Batches: 1  Memory Usage: 672kB
+                          ->  Parallel Seq Scan on orders o  (cost=0.00..2086.35 rows=7049 width=8) (actual time=0.067..17.602 rows=4037 loops=3)
+                                Filter: ((order_date >= '2025-01-01 00:00:00'::timestamp without time zone) AND (order_date <= '2025-03-31 00:00:00'::timestamp without time zone))
+                                Rows Removed by Filter: 29296
+Planning Time: 11.211 ms
+Execution Time: 85.613 ms
+
+analisis EXPLAIN analyze query asli :
+Melakukan sequential scan pada tabel products dan orders.
+Waktu eksekusi : 85.613 ms.
+
+query optimal :
+CREATE INDEX idx_orders_order_date ON orders (order_date);
+SELECT
+    SUM(oi.quantity * oi.price_at_order) AS total_revenue
+FROM order_items oi
+JOIN products p ON oi.product_id = p.id
+JOIN orders o ON oi.order_id = o.id
+WHERE p.description LIKE '%Sed%'
+AND o.order_date BETWEEN '2025-01-01' AND '2025-03-31';
+
+output dari EXPLAIN analyze query optimal :
+Finalize Aggregate  (cost=10518.21..10518.22 rows=1 width=32) (actual time=63.420..67.242 rows=1 loops=1)
+  ->  Gather  (cost=10517.99..10518.20 rows=2 width=32) (actual time=63.112..67.212 rows=3 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        ->  Partial Aggregate  (cost=9517.99..9518.00 rows=1 width=32) (actual time=57.792..57.798 rows=1 loops=3)
+              ->  Parallel Hash Join  (cost=1700.98..9510.49 rows=999 width=12) (actual time=6.470..57.041 rows=960 loops=3)
+                    Hash Cond: (oi.order_id = o.id)
+                    ->  Hash Join  (cost=44.00..7831.63 rows=8334 width=20) (actual time=0.596..48.469 rows=7804 loops=3)
+                          Hash Cond: (oi.product_id = p.id)
+                          ->  Parallel Seq Scan on order_items oi  (cost=0.00..7238.42 rows=208342 width=28) (actual time=0.021..21.459 rows=166667 loops=3)
+                          ->  Hash  (cost=43.50..43.50 rows=40 width=8) (actual time=0.539..0.540 rows=46 loops=3)
+                                Buckets: 1024  Batches: 1  Memory Usage: 10kB
+                                ->  Seq Scan on products p  (cost=0.00..43.50 rows=40 width=8) (actual time=0.044..0.522 rows=46 loops=3)
+                                      Filter: (description ~~ '%Sed%'::text)
+                                      Rows Removed by Filter: 954
+                    ->  Parallel Hash  (cost=1568.87..1568.87 rows=7049 width=8) (actual time=4.978..4.979 rows=4037 loops=3)
+                          Buckets: 16384  Batches: 1  Memory Usage: 640kB
+                          ->  Parallel Bitmap Heap Scan on orders o  (cost=259.13..1568.87 rows=7049 width=8) (actual time=1.048..3.817 rows=4037 loops=3)
+                                Recheck Cond: ((order_date >= '2025-01-01 00:00:00'::timestamp without time zone) AND (order_date <= '2025-03-31 00:00:00'::timestamp without time zone))
+                                Heap Blocks: exact=631
+                                ->  Bitmap Index Scan on idx_orders_order_date  (cost=0.00..256.13 rows=11984 width=0) (actual time=2.841..2.841 rows=12112 loops=1)
+                                      Index Cond: ((order_date >= '2025-01-01 00:00:00'::timestamp without time zone) AND (order_date <= '2025-03-31 00:00:00'::timestamp without time zone))
+Planning Time: 11.462 ms
+Execution Time: 67.304 ms
+
+analisis EXPLAIN analyze query optimal :
+Eksekusi jadi lebih cepat dengan waktu eksekusi : 67.304 ms.
+
+query 3 untuk melihat 10 produk paling laris
+
+queri asli:
+SELECT
+    p.name,
+    SUM(oi.quantity) AS total_sold
+FROM order_items oi
+JOIN products p ON oi.product_id = p.id
+GROUP BY p.name
+ORDER BY total_sold DESC
+LIMIT 10;
+
+output dari EXPLAIN analyze query asli :
+Limit  (cost=10208.08..10208.11 rows=10 width=23) (actual time=115.166..118.708 rows=10 loops=1)
+  ->  Sort  (cost=10208.08..10210.51 rows=972 width=23) (actual time=115.165..118.706 rows=10 loops=1)
+        Sort Key: (sum(oi.quantity)) DESC
+        Sort Method: top-N heapsort  Memory: 26kB
+        ->  Finalize GroupAggregate  (cost=9940.82..10187.08 rows=972 width=23) (actual time=114.030..118.568 rows=972 loops=1)
+              Group Key: p.name
+              ->  Gather Merge  (cost=9940.82..10167.64 rows=1944 width=23) (actual time=114.022..118.203 rows=2916 loops=1)
+                    Workers Planned: 2
+                    Workers Launched: 2
+                    ->  Sort  (cost=8940.80..8943.23 rows=972 width=23) (actual time=97.552..97.595 rows=972 loops=3)
+                          Sort Key: p.name
+                          Sort Method: quicksort  Memory: 65kB
+                          Worker 0:  Sort Method: quicksort  Memory: 65kB
+                          Worker 1:  Sort Method: quicksort  Memory: 65kB
+                          ->  Partial HashAggregate  (cost=8882.84..8892.56 rows=972 width=23) (actual time=96.470..96.570 rows=972 loops=3)
+                                Group Key: p.name
+                                Batches: 1  Memory Usage: 193kB
+                                Worker 0:  Batches: 1  Memory Usage: 193kB
+                                Worker 1:  Batches: 1  Memory Usage: 193kB
+                                ->  Hash Join  (cost=53.50..7841.13 rows=208342 width=19) (actual time=0.848..58.815 rows=166667 loops=3)
+                                      Hash Cond: (oi.product_id = p.id)
+                                      ->  Parallel Seq Scan on order_items oi  (cost=0.00..7238.42 rows=208342 width=12) (actual time=0.077..15.995 rows=166667 loops=3)
+                                      ->  Hash  (cost=41.00..41.00 rows=1000 width=23) (actual time=0.672..0.672 rows=1000 loops=3)
+                                            Buckets: 1024  Batches: 1  Memory Usage: 66kB
+                                            ->  Seq Scan on products p  (cost=0.00..41.00 rows=1000 width=23) (actual time=0.034..0.315 rows=1000 loops=3)
+Planning Time: 0.247 ms
+Execution Time: 118.783 ms
+
+analisis EXPLAIN analyze query asli :
+Melakukan sequential scan pada tabel order_items.
+Waktu eksekusi aktual: 118.783 mss.
+
+query optimal :
+CREATE INDEX idx_order_items_product_id ON order_items (product_id);
+EXPLAIN analyze SELECT
+    p.name,
+    SUM(oi.quantity) AS total_sold
+FROM order_items oi
+JOIN products p ON oi.product_id = p.id
+GROUP BY p.name
+ORDER BY total_sold DESC
+LIMIT 10;
+
+output dari EXPLAIN analyze query optimal :
+Limit  (cost=10207.93..10207.95 rows=10 width=23) (actual time=96.440..98.151 rows=10 loops=1)
+  ->  Sort  (cost=10207.93..10210.36 rows=972 width=23) (actual time=96.439..98.149 rows=10 loops=1)
+        Sort Key: (sum(oi.quantity)) DESC
+        Sort Method: top-N heapsort  Memory: 26kB
+        ->  Finalize GroupAggregate  (cost=9940.66..10186.92 rows=972 width=23) (actual time=95.419..98.029 rows=972 loops=1)
+              Group Key: p.name
+              ->  Gather Merge  (cost=9940.66..10167.48 rows=1944 width=23) (actual time=95.410..97.679 rows=2916 loops=1)
+                    Workers Planned: 2
+                    Workers Launched: 2
+                    ->  Sort  (cost=8940.64..8943.07 rows=972 width=23) (actual time=83.425..83.480 rows=972 loops=3)
+                          Sort Key: p.name
+                          Sort Method: quicksort  Memory: 65kB
+                          Worker 0:  Sort Method: quicksort  Memory: 65kB
+                          Worker 1:  Sort Method: quicksort  Memory: 65kB
+                          ->  Partial HashAggregate  (cost=8882.69..8892.41 rows=972 width=23) (actual time=82.373..82.463 rows=972 loops=3)
+                                Group Key: p.name
+                                Batches: 1  Memory Usage: 193kB
+                                Worker 0:  Batches: 1  Memory Usage: 193kB
+                                Worker 1:  Batches: 1  Memory Usage: 193kB
+                                ->  Hash Join  (cost=53.50..7841.02 rows=208333 width=19) (actual time=0.478..48.902 rows=166667 loops=3)
+                                      Hash Cond: (oi.product_id = p.id)
+                                      ->  Parallel Seq Scan on order_items oi  (cost=0.00..7238.33 rows=208333 width=12) (actual time=0.011..12.149 rows=166667 loops=3)
+                                      ->  Hash  (cost=41.00..41.00 rows=1000 width=23) (actual time=0.435..0.435 rows=1000 loops=3)
+                                            Buckets: 1024  Batches: 1  Memory Usage: 66kB
+                                            ->  Seq Scan on products p  (cost=0.00..41.00 rows=1000 width=23) (actual time=0.016..0.196 rows=1000 loops=3)
+Planning Time: 0.287 ms
+Execution Time: 98.210 ms
+
+analisis EXPLAIN analyze query optimal :
+Eksekusi jadi lebih cepat dengan waktu eksekusi : 98.210 ms.
